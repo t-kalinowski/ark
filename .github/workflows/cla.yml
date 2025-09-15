@@ -24,11 +24,11 @@ jobs:
 
       - name: "Strip whitespace from comment body"
         id: strip_whitespace
+        env:
+          COMMENT_BODY: ${{ github.event.comment.body }}
         run: |
           echo "body<<${{ steps.random_delimiter.outputs.value }}" >> $GITHUB_OUTPUT
-          cat << "${{ steps.random_delimiter.outputs.value }}" | sed '/^[[:space:]]*$/d; s/^[[:space:]]*//; s/[[:space:]]*$//' >> $GITHUB_OUTPUT
-          ${{ github.event.comment.body }}
-          ${{ steps.random_delimiter.outputs.value }}
+          printf '%s\n' "$COMMENT_BODY" | sed '/^[[:space:]]*$/d; s/^[[:space:]]*//; s/[[:space:]]*$//' >> $GITHUB_OUTPUT
           echo "${{ steps.random_delimiter.outputs.value }}" >> $GITHUB_OUTPUT
 
       - name: "Generate access token"
