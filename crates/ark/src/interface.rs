@@ -357,6 +357,7 @@ impl PendingInputs {
     ) -> anyhow::Result<ParseResult<PendingInputs>> {
         let input = if let Some(location) = location {
             let annotated_code = annotate_input(code, location, breakpoints);
+            log::trace!("Annotated code: \n```\n{annotated_code}\n```");
             harp::ParseInput::SrcFile(&SrcFile::new_virtual_empty_filename(annotated_code.into()))
         } else if harp::get_option_bool("keep.source") {
             harp::ParseInput::SrcFile(&SrcFile::new_virtual_empty_filename(code.into()))
@@ -669,12 +670,38 @@ impl RMain {
             // Initialise Ark's last value
             libr::SETCDR(r_symbol!(".ark_last_value"), harp::r_null());
 
-            // Store `.ark_breakpoint` in base namespace so it's maximally reachable
+            // Store `.ark_breakpoint` and friends in base namespace so they're
+            // maximally reachable. We might want to do that for all symbols
+            // exported from the Ark/Positron namespace.
             libr::SETCDR(
                 r_symbol!(".ark_breakpoint"),
                 // Originally defined in Positron namespace, get it from there
                 Environment::view(ARK_ENVS.positron_ns)
                     .get(".ark_breakpoint")
+                    .unwrap()
+                    .sexp,
+            );
+
+            libr::SETCDR(
+                r_symbol!(".ark_auto_step"),
+                Environment::view(ARK_ENVS.positron_ns)
+                    .get(".ark_auto_step")
+                    .unwrap()
+                    .sexp,
+            );
+
+            libr::SETCDR(
+                r_symbol!(".ark_verify_breakpoints_range"),
+                Environment::view(ARK_ENVS.positron_ns)
+                    .get(".ark_verify_breakpoints_range")
+                    .unwrap()
+                    .sexp,
+            );
+
+            libr::SETCDR(
+                r_symbol!(".ark_annotate_source"),
+                Environment::view(ARK_ENVS.positron_ns)
+                    .get(".ark_annotate_source")
                     .unwrap()
                     .sexp,
             );
@@ -1042,18 +1069,18 @@ impl RMain {
         //   look at what function R emitted as part of the `Debug at` output.
         if self.debug_is_debugging {
             // Did we just step onto an injected breakpoint
-            let at_injected_breakpoint = matches!(
+            let at_auto_step = matches!(
                 &self.debug_call_text,
                 DebugCallText::Finalized(text, DebugCallTextKind::DebugAt)
-                    if text.contains(".ark_breakpoint")
+                    if text.contains(".ark_auto_step")
             );
 
             // Are we stopped by an injected breakpoint
             let in_injected_breakpoint = harp::r_current_function().inherits("ark_breakpoint");
 
-            if at_injected_breakpoint || in_injected_breakpoint {
-                let kind = if at_injected_breakpoint { "at" } else { "in" };
-                log::trace!("Injected breakpoint reached ({kind}), moving to next expression");
+            if in_injected_breakpoint || at_auto_step {
+                let kind = if in_injected_breakpoint { "in" } else { "at" };
+                log::trace!("Auto-step expression reached ({kind}), moving to next expression");
 
                 self.debug_preserve_focus = false;
                 self.debug_send_dap(DapBackendEvent::Continued);
@@ -1363,7 +1390,7 @@ impl RMain {
 
             // Let frontend know the last request is complete. This turns us
             // back to Idle.
-            Self::reply_execute_request(&self.iopub_tx, req, &info, value);
+            Self::reply_execute_request(&self.iopub_tx, req, value);
         } else {
             log::info!("No active request to handle, discarding: {value:?}");
         }
@@ -1997,12 +2024,9 @@ impl RMain {
     fn reply_execute_request(
         iopub_tx: &Sender<IOPubMessage>,
         req: ActiveReadConsoleRequest,
-        prompt_info: &PromptInfo,
         value: ConsoleValue,
     ) {
-        let prompt = &prompt_info.input_prompt;
-
-        log::trace!("Got R prompt '{}', completing execution", prompt);
+        log::trace!("Completing execution after receiving prompt");
 
         let exec_count = req.exec_count;
 
@@ -2464,12 +2488,22 @@ impl RMain {
             return;
         };
 
-        let Some(uri) = srcref
+        let Some(filename) = srcref
             .srcfile()
             .and_then(|srcfile| srcfile.filename())
-            .and_then(|filename| Url::parse(&filename).anyhow())
             .log_err()
         else {
+            return;
+        };
+
+        // Only process file:// URIs (from our #line directives).
+        // Plain file paths or empty filenames are skipped silently.
+        if !filename.starts_with("file://") {
+            return;
+        }
+
+        let Ok(uri) = Url::parse(&filename) else {
+            log::warn!("verify_breakpoints: Failed to parse URI '{filename}'");
             return;
         };
 

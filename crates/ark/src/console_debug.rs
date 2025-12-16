@@ -255,6 +255,8 @@ impl RMain {
                 out.push(as_frame_info(frame, id)?);
             }
 
+            log::trace!("DAP: Current call stack:\n{out:#?}");
+
             Ok(out)
         }
     }
@@ -286,7 +288,7 @@ impl RMain {
         let hash = format!("{:x}", hasher.finish());
 
         ark_uri(&format!(
-            "debug/session{i}/{hash}/{source_name}.R",
+            "debug/session{i}/{hash}/{source_name}",
             i = debug_session_index,
         ))
     }
@@ -388,4 +390,36 @@ pub unsafe extern "C-unwind" fn ps_is_breakpoint_enabled(
 
     let enabled: RObject = dap.is_breakpoint_enabled(&uri, id).into();
     Ok(enabled.sexp)
+}
+
+/// Verify breakpoints in the line range covered by a srcref.
+/// Called after each expression is successfully evaluated in source().
+#[harp::register]
+pub unsafe extern "C-unwind" fn ps_verify_breakpoints(srcref: SEXP) -> anyhow::Result<SEXP> {
+    let srcref = RObject::view(srcref);
+    RMain::get().verify_breakpoints(srcref.clone());
+    Ok(libr::R_NilValue)
+}
+
+/// Verify breakpoints in an explicit line range.
+/// Called after each top-level expression in source() when using the source hook.
+#[harp::register]
+pub unsafe extern "C-unwind" fn ps_verify_breakpoints_range(
+    uri: SEXP,
+    start_line: SEXP,
+    end_line: SEXP,
+) -> anyhow::Result<SEXP> {
+    let uri: String = RObject::view(uri).try_into()?;
+    let start_line: i32 = RObject::view(start_line).try_into()?;
+    let end_line: i32 = RObject::view(end_line).try_into()?;
+
+    let Ok(uri) = Url::parse(&uri) else {
+        return Ok(libr::R_NilValue);
+    };
+
+    let main = RMain::get();
+    let mut dap = main.debug_dap.lock().unwrap();
+    dap.verify_breakpoints(&uri, start_line as u32, end_line as u32);
+
+    Ok(libr::R_NilValue)
 }
