@@ -494,7 +494,7 @@ impl RMain {
     /// Sets up the main R thread, initializes the `R_MAIN` singleton,
     /// and starts R. Does not return!
     /// SAFETY: Must be called only once. Enforced with a panic.
-    pub(crate) fn start(
+    pub fn start(
         r_args: Vec<String>,
         startup_file: Option<String>,
         comm_manager_tx: Sender<CommManagerEvent>,
