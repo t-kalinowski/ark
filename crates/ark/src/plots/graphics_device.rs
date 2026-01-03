@@ -55,7 +55,7 @@ use crate::modules::ARK_ENVS;
 use crate::r_task;
 
 #[derive(Debug)]
-pub(crate) enum GraphicsDeviceNotification {
+pub enum GraphicsDeviceNotification {
     DidChangePlotRenderSettings(PlotRenderSettings),
 }
 
